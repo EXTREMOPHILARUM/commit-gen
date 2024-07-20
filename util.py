@@ -1,38 +1,49 @@
-from typing import Literal, Dict
 
-CommitType = Literal["", "conventional"]
+from git import Repo
 
-commit_type_formats: Dict[CommitType, str] = {
-    '': '<commit message>',
-    'conventional': '<type>(<optional scope>): <commit message>',
-}
+import json
 
-def specify_commit_format(commit_type: CommitType) -> str:
-    return f"The output response must be in format:\n{commit_type_formats[commit_type]}"
 
-commit_types: Dict[CommitType, str] = {
-    '': '',
-    'conventional': '''Choose a type from the type-to-description JSON below that best describes the git diff:\n''' + '''{
-        "docs": "Documentation only changes",
-        "style": "Changes that do not affect the meaning of the code (white-space, formatting, missing semi-colons, etc)",
-        "refactor": "A code change that neither fixes a bug nor adds a feature",
-        "perf": "A code change that improves performance",
-        "test": "Adding missing tests or correcting existing tests",
-        "build": "Changes that affect the build system or external dependencies",
-        "ci": "Changes to our CI configuration files and scripts",
-        "chore": "Other changes that don't modify src or test files",
-        "revert": "Reverts a previous commit",
-        "feat": "A new feature",
-        "fix": "A bug fix"
-    }'''
-}
+def load_types(file_path):
+    with open(file_path, 'r') as file:
+        data = json.load(file)
+    return data['types']
 
-def generate_prompt(locale: str, max_length: int, commit_type: CommitType) -> str:
-    return '\n'.join(filter(None, [
-        'Generate a concise git commit message written in present tense for the following code diff with the given specifications below:',
-        f'Message language: {locale}',
-        f'Commit message must be a maximum of {max_length} characters.',
-        'Exclude anything unnecessary such as translation. Your entire response will be passed directly into git commit.',
-        commit_types[commit_type],
-        specify_commit_format(commit_type),
-    ]))
+def construct_prompt(types, locale='en', character_limit=100, changelog_length=200):
+    prompt = f"""
+    You are an AI that strictly conforms to responses in JSON formatted strings in the locale {locale}.
+    Your responses consist of valid JSON syntax, with no other comments, explanations, reasoning, or dialogue not consisting of valid JSON.
+    You will be given a git diff, which you need to infer the following fields:
+    1. `commit-message` Generate a concise commit-message not exceeding {character_limit} characters.
+    2. `change-log` Generate a descriptive change log at least {changelog_length} characters long.
+    3. `type` that best describes the git diff change type."""
+    
+    # Adding indexing to each type description
+    for idx, (type_key, description) in enumerate(types.items(), start=1):
+        prompt += f'\n        3.{idx}. "{type_key}": "{description}"'
+
+    prompt += """
+    If you cannot interpret the text for any of these fields, return the field with a null value in the JSON.
+    """
+    return prompt
+
+def get_git_diff(repository_path):
+    """
+    Get the git diff of the current working directory in the given repository.
+
+    Args:
+    repository_path (str): Path to the local git repository.
+
+    Returns:
+    str: The git diff as a string.
+    """
+    # Initialize the repository object
+    repo = Repo(repository_path)
+
+    # Check if there are uncommitted changes
+    if repo.is_dirty(untracked_files=True):
+        # Get the diff of the working directory against the HEAD commit
+        diff = repo.git.diff('HEAD', '--', cached=False, unified=0)
+        return diff
+    else:
+        return "No changes detected."
